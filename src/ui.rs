@@ -20,7 +20,6 @@ use crate::slurm::commands::CommandRunner;
 const C_HI_GREEN: Color = Color::Rgb(0x22, 0xcc, 0x44);
 const C_HI_RED: Color = Color::Rgb(0xdd, 0x22, 0x22);
 const C_HI_YELLOW: Color = Color::Rgb(0xdd, 0xaa, 0x00);
-const C_HI_BLUE: Color = Color::Rgb(0x44, 0x88, 0xee);
 const C_HI_CYAN: Color = Color::Rgb(0x44, 0xdd, 0xdd);
 const C_HI_PURPLE: Color = Color::Rgb(0xdd, 0x88, 0xff);
 const C_NODE_ALLOC: Color = Color::Rgb(0xdd, 0x44, 0x22);
@@ -177,6 +176,9 @@ impl App {
             if self.state.idle_timeout > 0
                 && now - self.last_interaction > Duration::from_secs(self.state.idle_timeout)
             {
+                let timeout = self.state.idle_timeout;
+                let msg = if timeout >= 60 { format!("Idle timeout after {}m", timeout / 60) } else { format!("Idle timeout after {}s", timeout) };
+                self.notification = Some((msg, Instant::now()));
                 break;
             }
 
@@ -194,10 +196,16 @@ impl App {
         }
 
         let exit_cmd = self.exit_command.take();
+        let notif = self.notification.take();
 
         execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
         terminal.show_cursor()?;
         disable_raw_mode()?;
+
+        if let Some((ref msg, _)) = notif {
+            eprintln!("{}", msg);
+        }
+
         Ok(exit_cmd)
     }
 
