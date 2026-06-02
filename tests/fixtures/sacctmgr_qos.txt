@@ -1,0 +1,3 @@
+gpu_high|gres/gpu=4|gres/gpu=8|gres/gpu=4
+gpu_low|gres/gpu=0|gres/gpu=2|gres/gpu=1
+cpu_normal|gres/gpu=0|gres/gpu=0|gres/gpu=0

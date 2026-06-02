@@ -1,0 +1,11 @@
+4|cpu|charlie|pending-reason1|PENDING|00:00:00|1-00:00:00|4|(null)|(null)|N/A|-|-|-
+4|cpu|alice|qos-min-gres|PENDING|00:00:00|1-00:00:00|4|(null)|QOSMinGRES|-|-|-|-
+4|gpu|bob|invalid-acc|PENDING|00:00:00|2-00:00:00|2|(null)|InvalidAccount|-|-|-|-
+4|cpu|dave|res-wait|PENDING|00:00:00|1-00:00:00|4|(null)|Resources|-|-|-|-
+4|cpu|alice|part-down|PENDING|00:00:00|1-00:00:00|4|(null)|PartitionDown|-|-|-|-
+4|gpu|bob|req-node|PENDING|00:00:00|1-00:00:00|1|(null)|ReqNodeNotAvail,node099|-|-|-|-
+4|cpu|alice|dep-never|PENDING|00:00:00|1-00:00:00|2|(null)|DependencyNeverSatisfied|-|-|-|-
+4|gpu|charlie|bad-constraints|PENDING|00:00:00|1-00:00:00|1|gpu:A100:8|BadConstraints|-|-|-|-
+4|cpu|eve|hold-admin|PENDING|00:00:00|1-00:00:00|2|(null)|JobHeldAdmin|-|-|-|-
+4|gpu|frank|licenses|PENDING|00:00:00|2-00:00:00|1|gpu:V100:4|Licenses|-|-|-|-
+4|cpu|grace|null-reason|RUNNING|01:00:00|1-00:00:00|2|N/A|-|-|-|-|-

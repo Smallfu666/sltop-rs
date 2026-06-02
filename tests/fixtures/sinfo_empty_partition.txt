@@ -1,0 +1,5 @@
+PARTITION AVAIL  THRESH CLUSTER   NODES   STATE NODELIST
+cpu*       up    _      cluster1     100   mix+n[001-050]
+cpu        up    _      cluster1     100   al[051-100]
+gpu        up    _      cluster1      60   mix+n[g001-g030]
+gpu        up    _      cluster1      60   id[g031-g060]

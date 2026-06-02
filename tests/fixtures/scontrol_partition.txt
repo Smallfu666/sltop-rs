@@ -1,0 +1,25 @@
+PARTITION=gpu
+    MaxTime=8:00:00 InactiveLimit=H:m:S DefaultTime=24:00:00
+    MinNodes=1 LastProcessedNode=cpu01
+    LLN=0 LWP=0 MEM=0 NBPS=0 NCPUSS=0 NPES=0 Sockets=0 Cores=0
+    PartitionName=gpu Nodes=gpu[g001-g060]
+    State=UP TotalCPUs=2400 TotalNodes=60 LastDownNode=gpu001
+    Licenses="cuda,mkl" MaxNodes=UNLIMITED MaxCPUsPerNode=UNLIMITED
+    NodeFeatures="" GRES="gpu:A100:8" OverSubscribe=NO
+    AllowGroups=ALL AllowAccounts=ALL
+    TRES=gres/gpu=480,node=60,mem=15360G,cpu=2400
+    preempt_mode=OFF
+    Nodes=gpu[g001-g030] mix
+    Nodes=gpu[g031-g060] idle
+
+PARTITION=cpu
+    MaxTime=01:00:00 InactiveLimit=H:m:S DefaultTime=24:00:00
+    MinNodes=0 LastProcessedNode=cpu01
+    PartitionName=cpu Nodes=cpu[001-100]
+    State=UP TotalCPUs=3200 TotalNodes=100
+    Licenses="" MaxNodes=UNLIMITED MaxCPUsPerNode=32
+    AllowGroups=ALL AllowAccounts=ALL
+    TRES=cpu=3200,mem=6400G,node=100,bod
+    preempt_mode=OFF
+    Nodes=cpu[051-100] alloc
+    Nodes=cpu[001-050] idle

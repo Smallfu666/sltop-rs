@@ -1,0 +1,23 @@
+[package]
+name = "sltop"
+version = "0.3.1"
+edition = "2021"
+description = "nvtop-inspired interactive SLURM cluster dashboard"
+license = "MIT"
+authors = ["whats2000", "sltop-rust contributors"]
+keywords = ["slurm", "hpc", "monitor", "cluster", "tui", "dashboard"]
+categories = ["command-line-utilities", "visualization"]
+repository = "https://github.com/whats2000/sltop"
+
+[dependencies]
+ratatui = "0.29"
+crossterm = "0.28"
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+thiserror = "2"
+chrono = { version = "0.4", features = ["std"] }
+unicode-width = "0.2"
+once_cell = "1"
+
+[dev-dependencies]
+serial_test = "3"

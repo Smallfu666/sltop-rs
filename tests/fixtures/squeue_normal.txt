@@ -1,0 +1,8 @@
+1|cpu|alice|train-bert|RUNNING|01:23:45|2-00:00:00|4|cpu:8|N/A|-|-|-|node001,node002
+2|gpu|bob|infer-resnet|RUNNING|05:00:00|1-00:00:00|8|gpu:V100:8|N/A|-|-|-|gpu001,gpu002
+3|gpu|charlie|batch-job|COMPLETING|00:30:00|2-00:00:00|2|gpu:V100:4|N/A|-|-|-|gpu010,gpu011
+4|cpu|alice|pending-ml|PENDING|00:00:00|1-00:00:00|4|(null)|N/A|-|-|-|-
+5|gpu|dave|qos-violation|PENDING|00:00:00|2-00:00:00|16|(null)|QOSMaxGRESPerJob|-|-|-|-
+6|cpu|alice|dep-job|PENDING|00:00:00|1-00:00:00|2|(null)|N/A|afterok:12345|-|-|-
+7|cpu|eve|array-job|PENDING|00:00:00|1-00:00:00|1|(null)|N/A|-|100|1|-
+8|gpu|frank|multi-arr|PENDING|00:00:00|1-00:00:00|1|gpu:V100:2|(null)|N/A|101|2|-
