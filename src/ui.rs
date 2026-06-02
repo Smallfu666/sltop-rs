@@ -498,11 +498,10 @@ impl App {
         }
         let mut lines: Vec<Line> = Vec::new();
         for rule in &self.state.rules {
+            let pcolor = partition_color(&rule.partition);
             lines.push(Line::from(Span::styled(
                 format!(" ── {} ──", rule.partition),
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(pcolor).add_modifier(Modifier::BOLD),
             )));
 
             let state_color = if rule.state == "UP" { C_HI_GREEN } else { C_HI_RED };
@@ -533,15 +532,32 @@ impl App {
                 rule.min_nodes, rule.max_nodes, rule.max_cpus_node,
             ))));
 
+            // GPU constraints with implied nodes
             if rule.min_gpu > 0 || rule.max_gpu_node > 0 {
+                let mut gpu_line = format!("  ⚠ MinGPU/job: {}", rule.min_gpu);
+                if rule.max_gpu_node > 0 {
+                    gpu_line.push_str(&format!("  MaxGPU/node: {}", rule.max_gpu_node));
+                }
+                // Implied nodes from GPU constraint
+                let gpu_pn = model::gpu_per_node_from_tres(&rule.tres);
+                if rule.min_gpu > 0 && gpu_pn > 0 {
+                    let implied = (rule.min_gpu + gpu_pn - 1) / gpu_pn;
+                    gpu_line.push_str(&format!("  → implies ≥ {} nodes", implied));
+                }
                 lines.push(Line::from(Span::styled(
-                    format!(
-                        "  ⚠ MinGPU/job: {}  MaxGPU/node: {}",
-                        rule.min_gpu, rule.max_gpu_node
-                    ),
+                    gpu_line,
                     Style::default()
                         .fg(C_HI_RED)
                         .add_modifier(Modifier::BOLD),
+                )));
+            }
+
+            // Total GPUs
+            if rule.gpu_total > 0 {
+                let gpu_pn = model::gpu_per_node_from_tres(&rule.tres);
+                lines.push(Line::from(Span::styled(
+                    format!("  Total GPUs: {} (≈ {}/node)", rule.gpu_total, gpu_pn),
+                    Style::default().fg(C_HI_CYAN),
                 )));
             }
 
@@ -555,16 +571,21 @@ impl App {
                 )));
             }
 
+            if !rule.allow_accounts.is_empty()
+                && rule.allow_accounts != "ALL"
+                && rule.allow_accounts != "(null)"
+            {
+                lines.push(Line::from(Span::styled(
+                    format!("  AllowAccounts: {}", rule.allow_accounts),
+                    Style::default().fg(C_HI_CYAN),
+                )));
+            }
+
             if !rule.tres.is_empty() && rule.tres != "(null)" {
-                let gpu_pn = model::gpu_per_node_from_tres(&rule.tres);
-                if gpu_pn > 0 {
-                    lines.push(Line::from(Span::styled(
-                        format!("  GPU/node ≈ {}  TRES: {}", gpu_pn, rule.tres),
-                        Style::default().fg(C_HI_CYAN),
-                    )));
-                } else {
-                    lines.push(Line::from(Span::raw(format!("  TRES: {}", rule.tres))));
-                }
+                lines.push(Line::from(Span::styled(
+                    format!("  TRES: {}", rule.tres),
+                    Style::default().fg(Color::Rgb(0xaa, 0xbb, 0xcc)),
+                )));
             }
 
             lines.push(Line::from(Span::raw("")));
