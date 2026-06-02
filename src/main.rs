@@ -25,8 +25,20 @@ fn main() {
 
     let app = ui::App::new(state, Box::new(runner));
 
-    if let Err(e) = app.run() {
-        eprintln!("TUI error: {}", e);
-        std::process::exit(1);
+    match app.run() {
+        Ok(Some(cmd)) => {
+            eprintln!("Connecting to compute node...");
+            let status = std::process::Command::new("sh")
+                .args(["-c", &cmd])
+                .status();
+            if let Err(e) = status {
+                eprintln!("Failed to execute: {}", e);
+            }
+        }
+        Ok(None) => {}
+        Err(e) => {
+            eprintln!("TUI error: {}", e);
+            std::process::exit(1);
+        }
     }
 }

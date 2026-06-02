@@ -117,6 +117,9 @@ pub struct App {
     pub last_auto_refresh: Instant,
     pub table_state: TableState,
     pub scroll_offset: usize,
+    pub exit_command: Option<String>,
+    pub confirm_cancel: Option<(String, String)>,
+    pub notification: Option<(String, Instant)>,
     runner: Box<dyn CommandRunner>,
 }
 
@@ -131,6 +134,9 @@ impl App {
             last_auto_refresh: Instant::now(),
             table_state: TableState::default(),
             scroll_offset: 0,
+            exit_command: None,
+            confirm_cancel: None,
+            notification: None,
             runner,
         };
         // Initial refresh
@@ -150,7 +156,7 @@ impl App {
         format!("{:02}:{:02}:{:02}", h, m, s)
     }
 
-    pub fn run(mut self) -> io::Result<()> {
+    pub fn run(mut self) -> io::Result<Option<String>> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
         execute!(stdout, EnterAlternateScreen)?;
@@ -187,10 +193,12 @@ impl App {
             }
         }
 
+        let exit_cmd = self.exit_command.take();
+
         execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
         terminal.show_cursor()?;
         disable_raw_mode()?;
-        Ok(())
+        Ok(exit_cmd)
     }
 
     fn render(&mut self, frame: &mut Frame) {
@@ -265,7 +273,7 @@ impl App {
         }
 
         let footer = if self.show_help {
-            " [1-4] Tab  [r] Refresh  [s] Sort  [S] Reverse  [↑↓] Navigate  [h] Hide Help  [q] Quit"
+            " [1-4] Tab  [Tab] Next  [r] Refresh  [s] Sort  [S] Reverse  [↑↓] Scroll  [c] Connect  [C] Cancel  [h] Hide  [q] Quit"
         } else {
             " sltop — Interactive SLURM Dashboard  |  [h] Help"
         };
@@ -273,6 +281,54 @@ impl App {
             Paragraph::new(footer).style(Style::default().fg(Color::Gray)),
             chunks[4],
         );
+
+        // Cancel confirmation overlay
+        if let Some((ref job_id, ref job_name)) = self.confirm_cancel {
+            let overlay_area = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Percentage(40),
+                    Constraint::Length(5),
+                    Constraint::Percentage(60),
+                ])
+                .split(frame.area())[1];
+            let overlay_inner = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Percentage(30),
+                    Constraint::Length(52),
+                    Constraint::Percentage(30),
+                ])
+                .split(overlay_area)[1];
+            let lines = vec![
+                Line::from(Span::styled(
+                    " Cancel Job ",
+                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                )),
+                Line::from(Span::raw(format!(" Job: {}", job_id))),
+                Line::from(Span::raw(format!(" Name: {}", job_name))),
+                Line::from(Span::raw("")),
+                Line::from(Span::styled(" (y)es  (n)o ", Style::default().fg(C_HI_YELLOW))),
+            ];
+            let p = Paragraph::new(Text::from(lines))
+                .style(Style::default().bg(Color::Rgb(0x44, 0x22, 0x22)));
+            frame.render_widget(p, overlay_inner);
+        }
+
+        // Notification toast
+        if let Some((ref msg, ref since)) = self.notification {
+            if since.elapsed() < Duration::from_secs(3) {
+                let notif = Paragraph::new(msg.as_str())
+                    .style(Style::default().fg(C_HI_CYAN));
+                let notif_area = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Min(1), Constraint::Length(msg.len() as u16 + 2)])
+                    .split(frame.area())[1];
+                frame.render_widget(notif, notif_area);
+            } else {
+                self.notification = None;
+            }
+        }
     }
 
     fn progress_bar(used: u32, total: u32) -> Span<'static> {
@@ -878,7 +934,36 @@ impl App {
                         },
                     )),
                 ]));
+                // GPU mini-bar
+                if gpu > 0 {
+                    let p_gpu_total = self.state.resource_rows.iter()
+                        .find(|r| r.partition == job.partition)
+                        .map(|r| model::gpu_per_node_from_gres(&r.gres) * r.nodes.total() as u64)
+                        .unwrap_or(0);
+                    if p_gpu_total > 0 {
+                        let bar_w = 6;
+                        let fill = (gpu * bar_w / p_gpu_total).min(bar_w) as usize;
+                        let bw = bar_w as usize;
+                        let bar: String = (0..fill).map(|_| '█').chain((fill..bw).map(|_| '░')).collect();
+                        lines.push(Line::from(Span::styled(
+                            format!("   GPU [{}] {}/{}", bar, gpu, p_gpu_total),
+                            Style::default().fg(C_HI_CYAN),
+                        )));
+                    }
+                }
                 lines.push(Line::from(Span::raw(format!("   {}", time_str))));
+                // Action hints
+                if job.state == "RUNNING" {
+                    lines.push(Line::from(Span::styled(
+                        "   [c] Connect  [C] Cancel",
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                } else {
+                    lines.push(Line::from(Span::styled(
+                        "   [C] Cancel",
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
                 lines.push(Line::from(Span::raw("")));
             }
         }
@@ -983,9 +1068,54 @@ impl App {
                     _ => {}
                 }
             }
-            KeyCode::Esc => {
-                self.current_tab = 2;
-                self.scroll_offset = 0;
+            KeyCode::Char('c') => {
+                if self.current_tab == 3 {
+                    let standalone = &self.state.job_groups.standalone;
+                    if !standalone.is_empty() && self.scroll_offset < standalone.len() {
+                        if let Some(job) = standalone.get(self.scroll_offset) {
+                            if job.state == "RUNNING" && job.nodelist != "-" && job.nodelist != "N/A" && !job.nodelist.is_empty() {
+                                let node = job.nodelist.split(',').next().unwrap_or(&job.nodelist);
+                                self.exit_command = Some(format!(
+                                    "srun --overlap --jobid {} --nodelist {} --cpu-bind=none --pty bash",
+                                    job.job_id, node
+                                ));
+                                self.running = false;
+                            }
+                        }
+                    }
+                }
+            }
+            KeyCode::Char('C') => {
+                if self.current_tab == 3 && self.confirm_cancel.is_none() {
+                    let standalone = &self.state.job_groups.standalone;
+                    if !standalone.is_empty() && self.scroll_offset < standalone.len() {
+                        if let Some(job) = standalone.get(self.scroll_offset) {
+                            self.confirm_cancel = Some((job.job_id.clone(), job.name.clone()));
+                        }
+                    }
+                }
+            }
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                if let Some((job_id, _)) = self.confirm_cancel.take() {
+                    let result = self.runner.run_scancel(&job_id);
+                    match result {
+                        Ok(_) => {
+                            self.notification = Some((format!("✓ Cancelled job {}", job_id), Instant::now()));
+                            let _ = self.state.refresh(&*self.runner);
+                            self.state.update_my_jobs();
+                        }
+                        Err(e) => {
+                            self.notification = Some((format!("✗ Cancel failed: {}", e), Instant::now()));
+                        }
+                    }
+                }
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                if self.current_tab != 3 {
+                    self.current_tab = 2;
+                    self.scroll_offset = 0;
+                }
+                self.confirm_cancel = None;
             }
             _ => {}
         }
