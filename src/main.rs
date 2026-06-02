@@ -4,6 +4,7 @@ mod slurm;
 mod parse;
 mod app;
 mod ui;
+mod theme;
 
 use clap::Parser;
 

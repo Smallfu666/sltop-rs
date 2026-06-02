@@ -7,6 +7,7 @@ pub mod cli;
 pub mod model;
 pub mod parse;
 pub mod slurm;
+pub mod theme;
 
 // Re-export key types for convenience
 pub use model::{

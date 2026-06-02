@@ -1,10 +1,11 @@
 use std::io::{self, Read};
 use std::time::{Duration, Instant};
 
+use crate::theme;
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Paragraph, Row, Table, TableState, Tabs},
     Frame, Terminal,
@@ -16,66 +17,16 @@ use crate::app::AppState;
 use crate::model;
 use crate::slurm::commands::CommandRunner;
 
-const C_HI_GREEN: Color = Color::Rgb(0x22, 0xcc, 0x44);
-const C_HI_RED: Color = Color::Rgb(0xdd, 0x22, 0x22);
-const C_HI_YELLOW: Color = Color::Rgb(0xdd, 0xaa, 0x00);
-const C_HI_CYAN: Color = Color::Rgb(0x44, 0xdd, 0xdd);
-const C_HI_PURPLE: Color = Color::Rgb(0xdd, 0x88, 0xff);
-const C_NODE_ALLOC: Color = Color::Rgb(0xdd, 0x44, 0x22);
-const C_NODE_MIX: Color = Color::Rgb(0xdd, 0xaa, 0x00);
-const C_NODE_IDLE: Color = Color::Rgb(0x22, 0xcc, 0x44);
-const C_NODE_DRAIN: Color = Color::Rgb(0x55, 0x55, 0x55);
-
-const PARTITION_PALETTE: &[Color] = &[
-    Color::Rgb(0x44, 0xee, 0x88),
-    Color::Rgb(0xdd, 0x88, 0x22),
-    Color::Rgb(0x22, 0xaa, 0xdd),
-    Color::Rgb(0xdd, 0x44, 0x77),
-    Color::Rgb(0x44, 0xdd, 0xdd),
-    Color::Rgb(0xdd, 0xdd, 0x44),
-    Color::Rgb(0x88, 0x44, 0xdd),
-    Color::Rgb(0xdd, 0x66, 0x22),
-    Color::Rgb(0x22, 0xdd, 0x88),
-    Color::Rgb(0x44, 0x88, 0xdd),
-];
-
-fn partition_color(name: &str) -> Color {
-    let hash: u64 = name.bytes().fold(0u64, |h, b| h.wrapping_mul(31).wrapping_add(b as u64));
-    PARTITION_PALETTE[hash as usize % PARTITION_PALETTE.len()]
-}
-
 const TAB_NAMES: &[&str] = &[
-    " ① Resources ",
-    " ② Rules ",
-    " ③ Queue ",
-    " ④ My Jobs ",
+    " 1:Resources ",
+    " 2:Rules ",
+    " 3:Queue ",
+    " 4:My Jobs ",
 ];
 
 const QUEUE_HEADERS: &[&str] = &[
-    "JobID", "Partition", "User", "Name", "State", "Elapsed", "Limit", "Nodes", "GRES", "Reason",
+    "JobID", "Partition", "User", "Name", "State", "Elapsed", "Limit", "N", "GRES", "Reason",
 ];
-
-fn state_style(state: &str) -> Style {
-    match state {
-        "RUNNING" => Style::default().fg(Color::Green),
-        "PENDING" => Style::default().fg(C_HI_YELLOW),
-        "COMPLETING" => Style::default().fg(C_HI_CYAN),
-        "FAILED" | "CANCELLED" => Style::default().fg(Color::Red),
-        "TIMEOUT" => Style::default().fg(C_HI_RED),
-        _ => Style::default().fg(Color::White),
-    }
-}
-
-fn state_symbol(state: &str) -> &'static str {
-    match state {
-        "RUNNING" => "▶",
-        "PENDING" => "⏳",
-        "COMPLETING" => "↻",
-        "FAILED" | "CANCELLED" => "✗",
-        "TIMEOUT" => "⏱",
-        _ => " ",
-    }
-}
 
 fn is_config_error(reason: &str) -> bool {
     let r = reason.trim();
@@ -93,16 +44,16 @@ fn reason_span(reason: &str) -> Span<'static> {
     }
     if is_config_error(reason) {
         Span::styled(
-            format!("⚠ {}", reason),
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            format!("[cfg] {}", reason),
+            Style::default().fg(theme::DANGER).add_modifier(Modifier::BOLD),
         )
     } else if is_node_unavail(reason) {
         Span::styled(
-            format!("⛔ {}", reason),
-            Style::default().fg(C_HI_CYAN).add_modifier(Modifier::BOLD),
+            format!("[node] {}", reason),
+            Style::default().fg(theme::INFO).add_modifier(Modifier::BOLD),
         )
     } else {
-        Span::raw(reason.to_string())
+        Span::styled(reason.to_string(), Style::default().fg(theme::MUTED))
     }
 }
 
@@ -137,7 +88,6 @@ impl App {
             notification: None,
             runner,
         };
-        // Initial refresh
         let _ = app.state.refresh(&*app.runner);
         app.state.update_my_jobs();
         app
@@ -165,7 +115,6 @@ impl App {
         let mut last_size = (0u16, 0u16);
 
         loop {
-            // Check terminal size for resize
             if let Ok((w, h)) = crossterm::terminal::size() {
                 if (w, h) != last_size {
                     last_size = (w, h);
@@ -227,35 +176,45 @@ impl App {
             ])
             .split(frame.area());
 
-        let title = Line::from(Span::styled(
-            format!(" SLURM Monitor [v{}] ", env!("CARGO_PKG_VERSION")),
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        ));
-        frame.render_widget(Paragraph::new(title), chunks[0]);
+        let title_left = Span::styled(
+            format!(" sltop v{} ", env!("CARGO_PKG_VERSION")),
+            Style::default().fg(theme::TEXT).add_modifier(Modifier::BOLD),
+        );
+        let right_info = if self.state.last_refresh.is_some() {
+            format!(" every {}s  |  {} ", self.state.cli_interval, Self::format_time())
+        } else {
+            String::new()
+        };
+        let title_right = Span::styled(right_info, Style::default().fg(theme::MUTED));
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![title_left, title_right])),
+            chunks[0],
+        );
 
         let mut status_spans = vec![];
         if let Some(_rt) = self.state.last_refresh {
-            let ts = Self::format_time();
             status_spans.push(Span::styled(
                 format!(
-                    " ✦ run:{}  ⏳ pend:{}  Σ:{}",
+                    " run:{}  pend:{}  total:{}",
                     self.state.running_count,
                     self.state.pending_count,
                     self.state.total_jobs,
                 ),
-                Style::default().fg(Color::Gray),
+                Style::default().fg(theme::TEXT),
             ));
-            status_spans.push(Span::raw("  ·  "));
-            status_spans.push(Span::styled(ts, Style::default().fg(Color::DarkGray)));
-            status_spans.push(Span::raw("  ·  "));
-            status_spans.push(Span::styled(
-                format!("every {}s", self.state.cli_interval),
-                Style::default().fg(Color::DarkGray),
-            ));
+            let cn = &self.state.cluster_nodes;
+            if cn.total() > 0 {
+                status_spans.push(Span::styled("  |  ", Style::default().fg(theme::DIM)));
+                status_spans.push(Span::styled(
+                    format!(
+                        "nodes  alloc:{}  mix:{}  idle:{}  drain:{}",
+                        cn.alloc, cn.mix, cn.idle, cn.drain,
+                    ),
+                    Style::default().fg(theme::MUTED),
+                ));
+            }
         } else {
-            status_spans.push(Span::styled(" idle", Style::default().fg(Color::Gray)));
+            status_spans.push(Span::styled(" idle", Style::default().fg(theme::MUTED)));
         }
         frame.render_widget(
             Paragraph::new(Line::from(status_spans)),
@@ -271,11 +230,10 @@ impl App {
         .select(self.current_tab)
         .highlight_style(
             Style::default()
-                .fg(Color::White)
-                .bg(Color::DarkGray)
+                .fg(theme::ACCENT)
                 .add_modifier(Modifier::BOLD),
         )
-        .divider(Span::raw(" "));
+        .divider(Span::styled(" | ", Style::default().fg(theme::DIM)));
         frame.render_widget(tabs, chunks[2]);
 
         match self.current_tab {
@@ -287,16 +245,15 @@ impl App {
         }
 
         let footer = if self.show_help {
-            " [1-4] Tab  [Tab] Next  [r] Refresh  [s] Sort  [S] Reverse  [↑↓] Scroll  [c] Connect  [C] Cancel  [h] Hide  [q] Quit"
+            " [1-4] Tab  [Tab] Next  [r] Refresh  [s] Sort  [S] Reverse  [arrows] Scroll  [c] Connect  [C] Cancel  [h] Hide  [q] Quit"
         } else {
-            " sltop — Interactive SLURM Dashboard  |  [h] Help"
+            " sltop  v0  [h] Help  [q] Quit"
         };
         frame.render_widget(
-            Paragraph::new(footer).style(Style::default().fg(Color::Gray)),
+            Paragraph::new(footer).style(Style::default().fg(theme::MUTED)),
             chunks[4],
         );
 
-        // Cancel confirmation overlay
         if let Some((ref job_id, ref job_name)) = self.confirm_cancel {
             let overlay_area = Layout::default()
                 .direction(Direction::Vertical)
@@ -317,23 +274,22 @@ impl App {
             let lines = vec![
                 Line::from(Span::styled(
                     " Cancel Job ",
-                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme::TEXT).add_modifier(Modifier::BOLD),
                 )),
                 Line::from(Span::raw(format!(" Job: {}", job_id))),
                 Line::from(Span::raw(format!(" Name: {}", job_name))),
                 Line::from(Span::raw("")),
-                Line::from(Span::styled(" (y)es  (n)o ", Style::default().fg(C_HI_YELLOW))),
+                Line::from(Span::styled(" (y)es  (n)o ", Style::default().fg(theme::WARNING))),
             ];
             let p = Paragraph::new(Text::from(lines))
-                .style(Style::default().bg(Color::Rgb(0x44, 0x22, 0x22)));
+                .style(Style::default().bg(theme::CONFIRM_BG));
             frame.render_widget(p, overlay_inner);
         }
 
-        // Notification toast
         if let Some((ref msg, ref since)) = self.notification {
             if since.elapsed() < Duration::from_secs(3) {
                 let notif = Paragraph::new(msg.as_str())
-                    .style(Style::default().fg(C_HI_CYAN));
+                    .style(Style::default().fg(theme::INFO));
                 let notif_area = Layout::default()
                     .direction(Direction::Horizontal)
                     .constraints([Constraint::Min(1), Constraint::Length(msg.len() as u16 + 2)])
@@ -347,18 +303,18 @@ impl App {
 
     fn progress_bar(used: u32, total: u32) -> Span<'static> {
         if total == 0 {
-            return Span::styled("[          ]", Style::default().fg(Color::DarkGray));
+            return Span::styled("[          ]", Style::default().fg(theme::DIM));
         }
         let width = 10u32;
         let fill = (used * width / total).min(width);
         let bar: String = (0..fill).map(|_| '█').chain((fill..width).map(|_| '░')).collect();
         let pct = used as f64 * 100.0 / total as f64;
         let color = if pct >= 90.0 {
-            C_HI_RED
+            theme::DANGER
         } else if pct >= 70.0 {
-            C_HI_YELLOW
+            theme::WARNING
         } else {
-            C_HI_GREEN
+            theme::SUCCESS
         };
         Span::styled(format!("[{}]", bar), Style::default().fg(color))
     }
@@ -368,7 +324,7 @@ impl App {
         if total == 0 {
             return Line::from(Span::styled(
                 format!("{}  [no nodes]", label),
-                Style::default().fg(Color::Gray),
+                Style::default().fg(theme::MUTED),
             ));
         }
         let width = 20usize;
@@ -378,21 +334,18 @@ impl App {
         let i = (idle as usize * width / total_u).min(width);
         let d = width.saturating_sub(a + m + i);
         Line::from(vec![
-            Span::styled(label.to_string(), Style::default().fg(Color::White)),
-            Span::styled("█".repeat(a), Style::default().fg(C_NODE_ALLOC)),
-            Span::styled("▓".repeat(m), Style::default().fg(C_NODE_MIX)),
-            Span::styled("░".repeat(i), Style::default().fg(C_NODE_IDLE)),
-            Span::styled("·".repeat(d), Style::default().fg(C_NODE_DRAIN)),
+            Span::styled(label.to_string(), Style::default().fg(theme::TEXT)),
+            Span::styled("█".repeat(a), Style::default().fg(theme::NODE_ALLOC)),
+            Span::styled("▓".repeat(m), Style::default().fg(theme::NODE_MIX)),
+            Span::styled("░".repeat(i), Style::default().fg(theme::NODE_IDLE)),
+            Span::styled("·".repeat(d), Style::default().fg(theme::NODE_DRAIN)),
         ])
-    }
-
-    fn find_rule(&self, partition: &str) -> Option<&model::Rule> {
-        self.state.rules.iter().find(|r| r.partition == partition)
     }
 
     fn render_resources(&mut self, frame: &mut Frame, area: Rect) {
         if self.state.resource_rows.is_empty() {
-            let p = Paragraph::new("No partition data.").style(Style::default().fg(Color::Gray));
+            let p = Paragraph::new("  No partition data.")
+                .style(Style::default().fg(theme::MUTED));
             frame.render_widget(p, area);
             return;
         }
@@ -400,31 +353,19 @@ impl App {
         let mut lines: Vec<Line> = Vec::new();
 
         lines.push(Line::from(Span::styled(
-            " ── Cluster Summary ──",
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
+            format!(" {:─^18} ", "Cluster Summary"),
+            Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD),
         )));
 
         let total_cpu_alloc: u32 = self.state.resource_rows.iter().map(|r| r.cpu.alloc).sum();
-        let total_cpu_idle: u32 = self.state.resource_rows.iter().map(|r| r.cpu.idle).sum();
         let total_cpu_all: u32 = self.state.resource_rows.iter().map(|r| r.cpu.total).sum();
         lines.push(Line::from(vec![
-            Span::styled(" CPUs     ".to_string(), Style::default().fg(Color::White)),
+            Span::styled(" CPUs     ".to_string(), Style::default().fg(theme::TEXT)),
             Self::progress_bar(total_cpu_alloc, total_cpu_all),
             Span::styled(
                 format!(" {} / {}  {:.1}%", total_cpu_alloc, total_cpu_all,
                     if total_cpu_all > 0 { total_cpu_alloc as f64 * 100.0 / total_cpu_all as f64 } else { 0.0 }),
-                Style::default().fg(Color::Gray),
-            ),
-        ]));
-        lines.push(Line::from(vec![
-            Span::styled(" CPUs Idle".to_string(), Style::default().fg(Color::White)),
-            Self::progress_bar(total_cpu_idle, total_cpu_all),
-            Span::styled(
-                format!(" {} / {}  {:.1}%", total_cpu_idle, total_cpu_all,
-                    if total_cpu_all > 0 { total_cpu_idle as f64 * 100.0 / total_cpu_all as f64 } else { 0.0 }),
-                Style::default().fg(Color::Gray),
+                Style::default().fg(theme::MUTED),
             ),
         ]));
 
@@ -434,12 +375,12 @@ impl App {
             .sum();
         if total_gpu_all > 0 {
             lines.push(Line::from(vec![
-                Span::styled(" GPUs     ".to_string(), Style::default().fg(Color::White)),
+                Span::styled(" GPUs     ".to_string(), Style::default().fg(theme::TEXT)),
                 Self::progress_bar(total_gpu_used as u32, total_gpu_all as u32),
                 Span::styled(
                     format!(" {} / {}  {:.1}%", total_gpu_used, total_gpu_all,
                         total_gpu_used as f64 * 100.0 / total_gpu_all as f64),
-                    Style::default().fg(Color::Gray),
+                    Style::default().fg(theme::MUTED),
                 ),
             ]));
         }
@@ -448,44 +389,48 @@ impl App {
         lines.push(self.stacked_node_line("Nodes", cn.alloc, cn.mix, cn.idle, cn.drain));
         lines.push(Line::from(Span::styled(
             format!(
-                "  █ alloc:{}  ▓ mix:{}  ░ idle:{}  · drain:{}",
+                "         alloc:{}  mix:{}  idle:{}  drain:{}",
                 cn.alloc, cn.mix, cn.idle, cn.drain,
             ),
-            Style::default().fg(Color::Gray),
+            Style::default().fg(theme::DIM),
         )));
         lines.push(Line::from(Span::raw("")));
 
         for row in &self.state.resource_rows {
-            let pcolor = partition_color(&row.partition);
             lines.push(Line::from(Span::styled(
-                format!(" ── {} ──", row.partition),
-                Style::default().fg(pcolor).add_modifier(Modifier::BOLD),
+                format!(" {}", row.partition),
+                Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD),
             )));
 
-            let rule = self.find_rule(&row.partition);
+            let rule = self.state.rules.iter().find(|r| r.partition == row.partition);
             let qos_name = rule.map(|r| r.qos.as_str()).unwrap_or("-");
-            let avail_color = if row.avail == "up" { C_HI_GREEN } else { C_HI_RED };
-            lines.push(Line::from(vec![
-                Span::styled("  ● ", Style::default().fg(avail_color)),
-                Span::raw(format!("{}  ", row.avail.to_uppercase())),
-                Span::styled("QoS ".to_string(), Style::default().fg(Color::Gray)),
-                Span::styled(qos_name.to_string(), Style::default().fg(C_HI_CYAN)),
-                Span::styled("  MaxTime ".to_string(), Style::default().fg(Color::Gray)),
-                Span::styled(row.timelimit.clone(), Style::default().fg(C_HI_PURPLE)),
-            ]));
+            let avail_indicator = if row.avail == "up" {
+                Span::styled("up", Style::default().fg(theme::SUCCESS))
+            } else {
+                Span::styled("down", Style::default().fg(theme::DANGER))
+            };
             let mem_gb = if row.mem_mb >= 1024 {
                 format!("{}GB", row.mem_mb / 1024)
             } else {
                 format!("{}MB", row.mem_mb)
             };
+
             lines.push(Line::from(vec![
-                Span::styled("  Mem ".to_string(), Style::default().fg(Color::Gray)),
-                Span::styled(mem_gb, Style::default().fg(Color::Rgb(0x88, 0xaa, 0xff))),
-                Span::styled("  GRES ".to_string(), Style::default().fg(Color::Gray)),
-                Span::styled(row.gres.clone(), Style::default().fg(C_HI_YELLOW)),
+                Span::styled("  status  ", Style::default().fg(theme::MUTED)),
+                avail_indicator,
+                Span::styled("  qos  ", Style::default().fg(theme::MUTED)),
+                Span::styled(qos_name, Style::default().fg(theme::TEXT)),
+                Span::styled("  maxtime  ", Style::default().fg(theme::MUTED)),
+                Span::styled(row.timelimit.clone(), Style::default().fg(theme::TEXT)),
+                Span::styled("  mem  ", Style::default().fg(theme::MUTED)),
+                Span::styled(mem_gb, Style::default().fg(theme::TEXT)),
             ]));
 
-            // Constraints line
+            lines.push(Line::from(vec![
+                Span::styled("  gres  ", Style::default().fg(theme::MUTED)),
+                Span::styled(row.gres.clone(), Style::default().fg(theme::TEXT)),
+            ]));
+
             if let Some(r) = rule {
                 let mut constraints = vec![];
                 if r.min_gpu > 0 {
@@ -506,18 +451,18 @@ impl App {
                 if !constraints.is_empty() {
                     lines.push(Line::from(Span::styled(
                         format!("  {}", constraints.join("  ")),
-                        Style::default().fg(Color::Rgb(0xbb, 0x99, 0x88)),
+                        Style::default().fg(theme::MUTED),
                     )));
                 }
             }
 
             lines.push(Line::from(vec![
-                Span::styled("  CPUs ".to_string(), Style::default().fg(Color::White)),
+                Span::styled("  CPUs  ", Style::default().fg(theme::TEXT)),
                 Self::progress_bar(row.cpu.alloc, row.cpu.total),
                 Span::styled(
                     format!(" {} / {}  {:.1}%", row.cpu.alloc, row.cpu.total,
                         if row.cpu.total > 0 { row.cpu.alloc as f64 * 100.0 / row.cpu.total as f64 } else { 0.0 }),
-                    Style::default().fg(Color::Gray),
+                    Style::default().fg(theme::MUTED),
                 ),
             ]));
 
@@ -525,12 +470,12 @@ impl App {
             if gpu_total > 0 {
                 let gpu_used = self.state.gpu_by_partition.get(&row.partition).copied().unwrap_or(0);
                 lines.push(Line::from(vec![
-                    Span::styled("  GPUs ".to_string(), Style::default().fg(Color::White)),
+                    Span::styled("  GPUs  ", Style::default().fg(theme::TEXT)),
                     Self::progress_bar(gpu_used as u32, gpu_total as u32),
                     Span::styled(
                         format!(" {} / {}  {:.1}%", gpu_used, gpu_total,
                             gpu_used as f64 * 100.0 / gpu_total as f64),
-                        Style::default().fg(Color::Gray),
+                        Style::default().fg(theme::MUTED),
                     ),
                 ]));
             }
@@ -544,10 +489,10 @@ impl App {
             ));
             lines.push(Line::from(Span::styled(
                 format!(
-                    "   █ alloc:{}  ▓ mix:{}  ░ idle:{}  · drain:{}",
+                    "         alloc:{}  mix:{}  idle:{}  drain:{}",
                     row.nodes.alloc, row.nodes.mix, row.nodes.idle, row.nodes.drain,
                 ),
-                Style::default().fg(Color::Gray),
+                Style::default().fg(theme::DIM),
             )));
             lines.push(Line::from(Span::raw("")));
         }
@@ -562,72 +507,73 @@ impl App {
 
     fn render_rules(&mut self, frame: &mut Frame, area: Rect) {
         if self.state.rules.is_empty() {
-            let p = Paragraph::new("No partition data.").style(Style::default().fg(Color::Gray));
+            let p = Paragraph::new("  No partition data.").style(Style::default().fg(theme::MUTED));
             frame.render_widget(p, area);
             return;
         }
         let mut lines: Vec<Line> = Vec::new();
         for rule in &self.state.rules {
-            let pcolor = partition_color(&rule.partition);
             lines.push(Line::from(Span::styled(
-                format!(" ── {} ──", rule.partition),
-                Style::default().fg(pcolor).add_modifier(Modifier::BOLD),
+                format!(" {}", rule.partition),
+                Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD),
             )));
 
-            let state_color = if rule.state == "UP" { C_HI_GREEN } else { C_HI_RED };
+            let state_indicator = if rule.state == "UP" {
+                Span::styled("up", Style::default().fg(theme::SUCCESS))
+            } else {
+                Span::styled("down", Style::default().fg(theme::DANGER))
+            };
             lines.push(Line::from(vec![
-                Span::styled("  ● ", Style::default().fg(state_color)),
-                Span::raw(format!("{}  ", rule.state)),
-                Span::styled("QoS ".to_string(), Style::default().fg(Color::Gray)),
-                Span::styled(rule.qos.clone(), Style::default().fg(C_HI_CYAN)),
-                Span::styled("  Priority ".to_string(), Style::default().fg(Color::Gray)),
-                Span::styled(rule.priority.clone(), Style::default().fg(C_HI_YELLOW)),
-                Span::styled("  OverSubscribe ".to_string(), Style::default().fg(Color::Gray)),
-                Span::raw(rule.oversubscribe.clone()),
+                Span::styled("  status  ", Style::default().fg(theme::MUTED)),
+                state_indicator,
+                Span::styled("  qos  ", Style::default().fg(theme::MUTED)),
+                Span::styled(rule.qos.clone(), Style::default().fg(theme::TEXT)),
+                Span::styled("  priority  ", Style::default().fg(theme::MUTED)),
+                Span::styled(rule.priority.clone(), Style::default().fg(theme::TEXT)),
+                Span::styled("  oversubscribe  ", Style::default().fg(theme::MUTED)),
+                Span::styled(rule.oversubscribe.clone(), Style::default().fg(theme::TEXT)),
             ]));
 
             lines.push(Line::from(vec![
-                Span::styled(
-                    format!("  MaxTime: {}", rule.max_time),
-                    Style::default().fg(C_HI_PURPLE),
-                ),
-                Span::styled(
-                    format!("  DefaultTime: {}", rule.default_time),
-                    Style::default().fg(Color::Rgb(0xbb, 0x88, 0xff)),
-                ),
+                Span::styled("  maxtime  ", Style::default().fg(theme::MUTED)),
+                Span::styled(rule.max_time.clone(), Style::default().fg(theme::TEXT)),
+                Span::styled("  default  ", Style::default().fg(theme::MUTED)),
+                Span::styled(rule.default_time.clone(), Style::default().fg(theme::TEXT)),
             ]));
 
-            lines.push(Line::from(Span::raw(format!(
-                "  MinNodes: {}  MaxNodes: {}  MaxCPUs/Node: {}",
-                rule.min_nodes, rule.max_nodes, rule.max_cpus_node,
-            ))));
+            lines.push(Line::from(vec![
+                Span::styled("  minnodes  ", Style::default().fg(theme::MUTED)),
+                Span::styled(rule.min_nodes.clone(), Style::default().fg(theme::TEXT)),
+                Span::styled("  maxnodes  ", Style::default().fg(theme::MUTED)),
+                Span::styled(rule.max_nodes.clone(), Style::default().fg(theme::TEXT)),
+                Span::styled("  maxcpus/node  ", Style::default().fg(theme::MUTED)),
+                Span::styled(rule.max_cpus_node.clone(), Style::default().fg(theme::TEXT)),
+            ]));
 
-            // GPU constraints with implied nodes
             if rule.min_gpu > 0 || rule.max_gpu_node > 0 {
-                let mut gpu_line = format!("  ⚠ MinGPU/job: {}", rule.min_gpu);
-                if rule.max_gpu_node > 0 {
-                    gpu_line.push_str(&format!("  MaxGPU/node: {}", rule.max_gpu_node));
+                let mut gpu_parts = vec![];
+                if rule.min_gpu > 0 {
+                    gpu_parts.push(format!("MinGPU/job: {}", rule.min_gpu));
                 }
-                // Implied nodes from GPU constraint
+                if rule.max_gpu_node > 0 {
+                    gpu_parts.push(format!("MaxGPU/node: {}", rule.max_gpu_node));
+                }
                 let gpu_pn = model::gpu_per_node_from_tres(&rule.tres);
                 if rule.min_gpu > 0 && gpu_pn > 0 {
                     let implied = (rule.min_gpu + gpu_pn - 1) / gpu_pn;
-                    gpu_line.push_str(&format!("  → implies ≥ {} nodes", implied));
+                    gpu_parts.push(format!("implies >= {} nodes", implied));
                 }
                 lines.push(Line::from(Span::styled(
-                    gpu_line,
-                    Style::default()
-                        .fg(C_HI_RED)
-                        .add_modifier(Modifier::BOLD),
+                    format!("  {}", gpu_parts.join("  ")),
+                    Style::default().fg(theme::WARNING),
                 )));
             }
 
-            // Total GPUs
             if rule.gpu_total > 0 {
                 let gpu_pn = model::gpu_per_node_from_tres(&rule.tres);
                 lines.push(Line::from(Span::styled(
-                    format!("  Total GPUs: {} (≈ {}/node)", rule.gpu_total, gpu_pn),
-                    Style::default().fg(C_HI_CYAN),
+                    format!("  total gpus: {} ({} per node)", rule.gpu_total, gpu_pn),
+                    Style::default().fg(theme::MUTED),
                 )));
             }
 
@@ -636,25 +582,24 @@ impl App {
                 && rule.allow_groups != "(null)"
             {
                 lines.push(Line::from(Span::styled(
-                    format!("  AllowGroups: {}", rule.allow_groups),
-                    Style::default().fg(C_HI_GREEN),
+                    format!("  allowgroups: {}", rule.allow_groups),
+                    Style::default().fg(theme::MUTED),
                 )));
             }
-
             if !rule.allow_accounts.is_empty()
                 && rule.allow_accounts != "ALL"
                 && rule.allow_accounts != "(null)"
             {
                 lines.push(Line::from(Span::styled(
-                    format!("  AllowAccounts: {}", rule.allow_accounts),
-                    Style::default().fg(C_HI_CYAN),
+                    format!("  allowaccounts: {}", rule.allow_accounts),
+                    Style::default().fg(theme::MUTED),
                 )));
             }
 
             if !rule.tres.is_empty() && rule.tres != "(null)" {
                 lines.push(Line::from(Span::styled(
-                    format!("  TRES: {}", rule.tres),
-                    Style::default().fg(Color::Rgb(0xaa, 0xbb, 0xcc)),
+                    format!("  tres: {}", rule.tres),
+                    Style::default().fg(theme::DIM),
                 )));
             }
 
@@ -672,20 +617,20 @@ impl App {
     fn render_queue(&mut self, frame: &mut Frame, area: Rect) {
         if self.state.queue_jobs.is_empty() {
             let p = Paragraph::new("  No jobs in queue.")
-                .style(Style::default().fg(Color::Gray));
+                .style(Style::default().fg(theme::MUTED));
             frame.render_widget(p, area);
             return;
         }
 
         let widths = [
-            Constraint::Length(8),
+            Constraint::Length(9),
             Constraint::Length(12),
             Constraint::Length(10),
             Constraint::Length(22),
             Constraint::Length(10),
             Constraint::Length(9),
             Constraint::Length(9),
-            Constraint::Length(5),
+            Constraint::Length(4),
             Constraint::Length(12),
             Constraint::Min(10),
         ];
@@ -696,9 +641,9 @@ impl App {
             .map(|(i, h)| {
                 let text = if self.state.sort_col == Some(i) {
                     if self.state.sort_rev {
-                        format!("{} ▼", h)
+                        format!("{} v", h)
                     } else {
-                        format!("{} ▲", h)
+                        format!("{} ^", h)
                     }
                 } else {
                     h.to_string()
@@ -706,13 +651,13 @@ impl App {
                 Span::styled(
                     text,
                     Style::default()
-                        .fg(Color::White)
+                        .fg(theme::TEXT)
                         .add_modifier(Modifier::BOLD),
                 )
             })
             .collect();
         let header = Row::new(header_cells)
-            .style(Style::default().bg(Color::Rgb(0x33, 0x33, 0x55)));
+            .style(Style::default().bg(theme::HEADER_BG));
 
         let current_user =
             std::env::var("USER").unwrap_or_else(|_| std::env::var("LOGNAME").unwrap_or_default());
@@ -722,24 +667,23 @@ impl App {
             .iter()
             .map(|job| {
                 let name = if job.name.len() > 22 {
-                    format!("{}…", &job.name[..22])
+                    format!("{}...", &job.name[..22])
                 } else {
                     job.name.clone()
                 };
-                let pcolor = partition_color(&job.partition);
                 let cells = vec![
                     Span::raw(job.job_id.clone()),
-                    Span::styled(job.partition.clone(), Style::default().fg(pcolor)),
+                    Span::raw(job.partition.clone()),
                     Span::raw(job.user.clone()),
                     Span::raw(name),
-                    Span::styled(job.state.clone(), state_style(&job.state)),
+                    Span::styled(job.state.clone(), theme::state_style(&job.state)),
                     Span::raw(job.elapsed.clone()),
                     Span::raw(job.timelimit.clone()),
                     Span::raw(job.nodes.clone()),
                     Span::raw(job.gres.clone()),
                     if job.reason.is_empty() || job.reason == "N/A" || job.reason == "(null)" || job.reason == "None" {
                         if !job.nodelist.is_empty() && job.nodelist != "N/A" && job.nodelist != "-" && job.nodelist != "(null)" {
-                            Span::styled(format!("nodes: {}", job.nodelist), Style::default().fg(Color::DarkGray))
+                            Span::styled(format!("nodes: {}", job.nodelist), Style::default().fg(theme::DIM))
                         } else {
                             Span::raw("")
                         }
@@ -749,7 +693,7 @@ impl App {
                 ];
                 let is_me = job.user == current_user;
                 Row::new(cells).style(if is_me {
-                    Style::default().bg(Color::Rgb(0x33, 0x33, 0x11))
+                    Style::default().bg(theme::USER_BG)
                 } else {
                     Style::default()
                 })
@@ -760,7 +704,7 @@ impl App {
             .header(header)
             .row_highlight_style(
                 Style::default()
-                    .bg(Color::Rgb(0x33, 0x44, 0x66))
+                    .bg(theme::SELECTED_BG)
                     .add_modifier(Modifier::BOLD),
             );
 
@@ -774,34 +718,38 @@ impl App {
     fn render_my_jobs(&mut self, frame: &mut Frame, area: Rect) {
         let group = &self.state.job_groups;
         if group.chains.is_empty() && group.arrays.is_empty() && group.standalone.is_empty() {
-            let p = Paragraph::new("  No jobs for current user.")
-                .style(Style::default().fg(Color::Gray));
+            let msg = Line::from(vec![
+                Span::raw("  "),
+                Span::styled("No Jobs", Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD)),
+            ]);
+            let hint = Line::from(Span::styled(
+                "  No jobs found for current user.  Submit with `sbatch` or check a different user with `-u`.",
+                Style::default().fg(theme::MUTED),
+            ));
+            let p = Paragraph::new(Text::from(vec![msg, hint])).style(Style::default());
             frame.render_widget(p, area);
             return;
         }
         let mut lines: Vec<Line> = Vec::new();
 
-        // Chains
         if !group.chains.is_empty() {
             lines.push(Line::from(Span::styled(
-                " ── Chains ──",
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
+                format!(" {}", "Chains"),
+                Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD),
             )));
             for chain in &group.chains {
                 let c = model::JobStateCounts::from_jobs(chain);
                 lines.push(Line::from(Span::styled(
                     format!(
-                        "  Chain: {} jobs  ▶{}  ⏳{}",
+                        "  Chain: {} jobs  R:{}  P:{}",
                         chain.len(),
                         c.running,
                         c.pending,
                     ),
-                    Style::default().fg(C_HI_YELLOW),
+                    Style::default().fg(theme::MUTED),
                 )));
                 for (idx, job) in chain.iter().enumerate() {
-                    let prefix = if idx == 0 { " ─" } else { " ▼" };
+                    let prefix = if idx == 0 { " ->" } else { " v" };
                     let gpu = model::parse_job_gpu(&job.gres);
                     let gpu_s = if gpu > 0 {
                         format!(" gpu:{}", gpu)
@@ -809,10 +757,10 @@ impl App {
                         String::new()
                     };
                     lines.push(Line::from(vec![
-                        Span::styled(prefix, Style::default().fg(Color::Gray)),
+                        Span::styled(prefix, Style::default().fg(theme::DIM)),
                         Span::styled(
                             format!(" [{}] {}", job.job_id, job.name),
-                            Style::default().fg(Color::White),
+                            Style::default().fg(theme::TEXT),
                         ),
                         Span::raw(format!(
                             "  {}{}",
@@ -829,13 +777,13 @@ impl App {
                             format!(" ({})", job.reason)
                         };
                         lines.push(Line::from(Span::styled(
-                            format!("  ⏳ {}{}", job.state, reason),
-                            Style::default().fg(C_HI_YELLOW),
+                            format!("  P {}{}", job.state, reason),
+                            Style::default().fg(theme::WARNING),
                         )));
                     } else {
                         lines.push(Line::from(Span::styled(
-                            format!("  ▶ {}/{}", job.elapsed, job.timelimit),
-                            Style::default().fg(Color::Green),
+                            format!("  R {}/{}", job.elapsed, job.timelimit),
+                            Style::default().fg(theme::SUCCESS),
                         )));
                     }
                 }
@@ -843,13 +791,10 @@ impl App {
             }
         }
 
-        // Arrays
         if !group.arrays.is_empty() {
             lines.push(Line::from(Span::styled(
-                " ── Arrays ──",
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
+                format!(" {}", "Arrays"),
+                Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD),
             )));
             for arr in &group.arrays {
                 let first = &arr[0];
@@ -869,18 +814,18 @@ impl App {
                 let bar_w = 10;
                 let fill = (done * bar_w / total.max(1)).min(bar_w);
                 let bar_color = if failed > 0 {
-                    C_HI_RED
+                    theme::DANGER
                 } else if done == total {
-                    C_HI_GREEN
+                    theme::SUCCESS
                 } else {
-                    C_HI_YELLOW
+                    theme::WARNING
                 };
                 let bar: String = (0..bar_w)
                     .map(|i| if i < fill { '█' } else { '░' })
                     .collect();
                 lines.push(Line::from(Span::styled(
                     format!("  Array: {} ({})", first.name, first.array_job_id),
-                    Style::default().fg(Color::White),
+                    Style::default().fg(theme::TEXT),
                 )));
                 lines.push(Line::from(vec![
                     Span::styled(
@@ -889,27 +834,24 @@ impl App {
                     ),
                     Span::styled(
                         format!("  {}/{}", done, total),
-                        Style::default().fg(Color::Gray),
+                        Style::default().fg(theme::MUTED),
                     ),
                 ]));
                 lines.push(Line::from(Span::styled(
                     format!(
-                        "   ▶ {}  ⏳ {}  ✓ {}  ✗ {}",
+                        "   R:{}  P:{}  done:{}  fail:{}",
                         running, pending, completed, failed
                     ),
-                    Style::default().fg(Color::Gray),
+                    Style::default().fg(theme::MUTED),
                 )));
                 lines.push(Line::from(Span::raw("")));
             }
         }
 
-        // Standalone
         if !group.standalone.is_empty() {
             lines.push(Line::from(Span::styled(
-                " ── Standalone ──",
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
+                format!(" {}", "Standalone"),
+                Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD),
             )));
             for job in &group.standalone {
                 let gpu = model::parse_job_gpu(&job.gres);
@@ -918,7 +860,12 @@ impl App {
                 } else {
                     String::new()
                 };
-                let sym = state_symbol(&job.state);
+                let st = theme::state_style(&job.state);
+                let state_tag = match job.state.as_str() {
+                    "RUNNING" => "R",
+                    "PENDING" => "P",
+                    _ => &job.state,
+                };
                 let time_str = if job.state == "PENDING" {
                     if !job.reason.is_empty()
                         && job.reason != "(null)"
@@ -933,8 +880,8 @@ impl App {
                 };
                 lines.push(Line::from(vec![
                     Span::styled(
-                        format!("  {} [{}] {}", sym, job.job_id, job.name),
-                        state_style(&job.state),
+                        format!("  {} [{}] {}", state_tag, job.job_id, job.name),
+                        st,
                     ),
                     Span::raw(format!(
                         "  {} {}{}",
@@ -948,7 +895,6 @@ impl App {
                         },
                     )),
                 ]));
-                // GPU mini-bar
                 if gpu > 0 {
                     let p_gpu_total = self.state.resource_rows.iter()
                         .find(|r| r.partition == job.partition)
@@ -960,22 +906,21 @@ impl App {
                         let bw = bar_w as usize;
                         let bar: String = (0..fill).map(|_| '█').chain((fill..bw).map(|_| '░')).collect();
                         lines.push(Line::from(Span::styled(
-                            format!("   GPU [{}] {}/{}", bar, gpu, p_gpu_total),
-                            Style::default().fg(C_HI_CYAN),
+                            format!("   gpu [{}] {}/{}", bar, gpu, p_gpu_total),
+                            Style::default().fg(theme::MUTED),
                         )));
                     }
                 }
                 lines.push(Line::from(Span::raw(format!("   {}", time_str))));
-                // Action hints
                 if job.state == "RUNNING" {
                     lines.push(Line::from(Span::styled(
                         "   [c] Connect  [C] Cancel",
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(theme::DIM),
                     )));
                 } else {
                     lines.push(Line::from(Span::styled(
                         "   [C] Cancel",
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(theme::DIM),
                     )));
                 }
                 lines.push(Line::from(Span::raw("")));
@@ -993,11 +938,10 @@ impl App {
     fn handle_input(&mut self, buf: &[u8]) -> io::Result<()> {
         self.last_interaction = Instant::now();
         let byte = buf[0];
-        // Escape sequence: \x1b[A (arrow) or \x1b[5~ (PgUp) or \x1b[6~ (PgDn)
         if byte == 0x1b && buf.len() >= 3 {
             if buf.len() >= 3 && buf[1] == b'[' {
                 match buf[2] {
-                    b'A' => { // Up
+                    b'A' => {
                         match self.current_tab {
                             0 | 1 | 3 => self.scroll_offset = self.scroll_offset.saturating_sub(1),
                             2 => {
@@ -1008,7 +952,7 @@ impl App {
                         }
                         return Ok(());
                     }
-                    b'B' => { // Down
+                    b'B' => {
                         match self.current_tab {
                             0 | 1 | 3 => self.scroll_offset += 1,
                             2 => {
@@ -1020,7 +964,7 @@ impl App {
                         }
                         return Ok(());
                     }
-                    b'5' if buf.len() >= 4 && buf[3] == b'~' => { // PgUp
+                    b'5' if buf.len() >= 4 && buf[3] == b'~' => {
                         match self.current_tab {
                             0 | 1 | 3 => self.scroll_offset = self.scroll_offset.saturating_sub(10),
                             2 => {
@@ -1031,7 +975,7 @@ impl App {
                         }
                         return Ok(());
                     }
-                    b'6' if buf.len() >= 4 && buf[3] == b'~' => { // PgDn
+                    b'6' if buf.len() >= 4 && buf[3] == b'~' => {
                         match self.current_tab {
                             0 | 1 | 3 => self.scroll_offset += 10,
                             2 => {
@@ -1047,9 +991,8 @@ impl App {
                 }
             }
         }
-        // Single-byte keys
         match byte {
-            b'\x1b' => { // Esc
+            b'\x1b' => {
                 if self.confirm_cancel.is_some() {
                     self.confirm_cancel = None;
                 } else {
@@ -1057,7 +1000,7 @@ impl App {
                     self.scroll_offset = 0;
                 }
             }
-            b'\t' => { // Tab
+            b'\t' => {
                 self.current_tab = (self.current_tab + 1) % 4;
                 self.scroll_offset = 0;
             }
@@ -1122,12 +1065,12 @@ impl App {
                     let result = self.runner.run_scancel(&job_id);
                     match result {
                         Ok(_) => {
-                            self.notification = Some((format!("✓ Cancelled job {}", job_id), Instant::now()));
+                            self.notification = Some((format!("Cancelled job {}", job_id), Instant::now()));
                             let _ = self.state.refresh(&*self.runner);
                             self.state.update_my_jobs();
                         }
                         Err(e) => {
-                            self.notification = Some((format!("✗ Cancel failed: {}", e), Instant::now()));
+                            self.notification = Some((format!("Cancel failed: {}", e), Instant::now()));
                         }
                     }
                 }
