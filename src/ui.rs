@@ -656,9 +656,10 @@ impl App {
                 } else {
                     job.name.clone()
                 };
+                let pcolor = partition_color(&job.partition);
                 let cells = vec![
                     Span::raw(job.job_id.clone()),
-                    Span::raw(job.partition.clone()),
+                    Span::styled(job.partition.clone(), Style::default().fg(pcolor)),
                     Span::raw(job.user.clone()),
                     Span::raw(name),
                     Span::styled(job.state.clone(), state_style(&job.state)),
@@ -666,7 +667,15 @@ impl App {
                     Span::raw(job.timelimit.clone()),
                     Span::raw(job.nodes.clone()),
                     Span::raw(job.gres.clone()),
-                    reason_span(&job.reason),
+                    if job.reason.is_empty() || job.reason == "N/A" || job.reason == "(null)" || job.reason == "None" {
+                        if !job.nodelist.is_empty() && job.nodelist != "N/A" && job.nodelist != "-" && job.nodelist != "(null)" {
+                            Span::styled(format!("nodes: {}", job.nodelist), Style::default().fg(Color::DarkGray))
+                        } else {
+                            Span::raw("")
+                        }
+                    } else {
+                        reason_span(&job.reason)
+                    },
                 ];
                 let is_me = job.user == current_user;
                 Row::new(cells).style(if is_me {
