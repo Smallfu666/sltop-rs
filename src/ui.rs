@@ -162,7 +162,16 @@ impl App {
         let mut terminal = Terminal::new(backend)?;
         let mut stdin = io::stdin();
 
+        let mut last_size = (0u16, 0u16);
+
         loop {
+            // Check terminal size for resize
+            if let Ok((w, h)) = crossterm::terminal::size() {
+                if (w, h) != last_size {
+                    last_size = (w, h);
+                    let _ = terminal.autoresize().ok();
+                }
+            }
             terminal.draw(|frame| self.render(frame))?;
 
             let now = Instant::now();
