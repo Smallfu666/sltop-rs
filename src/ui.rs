@@ -10,7 +10,7 @@ use ratatui::{
     Frame, Terminal,
 };
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
-use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::execute;
 
 use crate::app::AppState;
@@ -98,6 +98,7 @@ pub struct App {
     pub last_interaction: Instant,
     pub last_auto_refresh: Instant,
     pub table_state: TableState,
+    pub scroll_offset: usize,
     runner: Box<dyn CommandRunner>,
 }
 
@@ -111,6 +112,7 @@ impl App {
             last_interaction: Instant::now(),
             last_auto_refresh: Instant::now(),
             table_state: TableState::default(),
+            scroll_offset: 0,
             runner,
         };
         // Initial refresh
@@ -131,6 +133,7 @@ impl App {
     }
 
     pub fn run(mut self) -> io::Result<()> {
+        enable_raw_mode()?;
         let mut stdout = io::stdout();
         execute!(stdout, EnterAlternateScreen)?;
         let backend = CrosstermBackend::new(stdout);
@@ -168,6 +171,7 @@ impl App {
 
         execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
         terminal.show_cursor()?;
+        disable_raw_mode()?;
         Ok(())
     }
 
@@ -294,7 +298,7 @@ impl App {
         ])
     }
 
-    fn render_resources(&self, frame: &mut Frame, area: Rect) {
+    fn render_resources(&mut self, frame: &mut Frame, area: Rect) {
         if self.state.resource_rows.is_empty() {
             let p = Paragraph::new("No partition data.").style(Style::default().fg(Color::Gray));
             frame.render_widget(p, area);
@@ -408,11 +412,15 @@ impl App {
             lines.push(Line::from(Span::raw("")));
         }
 
-        let p = Paragraph::new(Text::from(lines));
+        let max_scroll = lines.len().saturating_sub(area.height as usize);
+        if self.scroll_offset > max_scroll {
+            self.scroll_offset = max_scroll;
+        }
+        let p = Paragraph::new(Text::from(lines)).scroll((self.scroll_offset as u16, 0));
         frame.render_widget(p, area);
     }
 
-    fn render_rules(&self, frame: &mut Frame, area: Rect) {
+    fn render_rules(&mut self, frame: &mut Frame, area: Rect) {
         if self.state.rules.is_empty() {
             let p = Paragraph::new("No partition data.").style(Style::default().fg(Color::Gray));
             frame.render_widget(p, area);
@@ -492,7 +500,11 @@ impl App {
             lines.push(Line::from(Span::raw("")));
         }
 
-        let p = Paragraph::new(Text::from(lines));
+        let max_scroll = lines.len().saturating_sub(area.height as usize);
+        if self.scroll_offset > max_scroll {
+            self.scroll_offset = max_scroll;
+        }
+        let p = Paragraph::new(Text::from(lines)).scroll((self.scroll_offset as u16, 0));
         frame.render_widget(p, area);
     }
 
@@ -589,7 +601,7 @@ impl App {
         frame.render_stateful_widget(table, area, &mut self.table_state);
     }
 
-    fn render_my_jobs(&self, frame: &mut Frame, area: Rect) {
+    fn render_my_jobs(&mut self, frame: &mut Frame, area: Rect) {
         let group = &self.state.job_groups;
         if group.chains.is_empty() && group.arrays.is_empty() && group.standalone.is_empty() {
             let p = Paragraph::new("  No jobs for current user.")
@@ -771,7 +783,11 @@ impl App {
             }
         }
 
-        let p = Paragraph::new(Text::from(lines));
+        let max_scroll = lines.len().saturating_sub(area.height as usize);
+        if self.scroll_offset > max_scroll {
+            self.scroll_offset = max_scroll;
+        }
+        let p = Paragraph::new(Text::from(lines)).scroll((self.scroll_offset as u16, 0));
         frame.render_widget(p, area);
     }
 
@@ -781,10 +797,14 @@ impl App {
             KeyCode::Char('q') => {
                 self.running = false;
             }
-            KeyCode::Char('1') => self.current_tab = 0,
-            KeyCode::Char('2') => self.current_tab = 1,
-            KeyCode::Char('3') => self.current_tab = 2,
-            KeyCode::Char('4') => self.current_tab = 3,
+            KeyCode::Char('1') => { self.current_tab = 0; self.scroll_offset = 0; }
+            KeyCode::Char('2') => { self.current_tab = 1; self.scroll_offset = 0; }
+            KeyCode::Char('3') => { self.current_tab = 2; self.scroll_offset = 0; }
+            KeyCode::Char('4') => { self.current_tab = 3; self.scroll_offset = 0; }
+            KeyCode::Tab => {
+                self.current_tab = (self.current_tab + 1) % 4;
+                self.scroll_offset = 0;
+            }
             KeyCode::Char('r') => {
                 let _ = self.state.refresh(&*self.runner);
                 self.state.update_my_jobs();
@@ -811,23 +831,61 @@ impl App {
             KeyCode::Char('h') => {
                 self.show_help = !self.show_help;
             }
-            KeyCode::Esc => {
-                self.current_tab = 2;
-            }
             KeyCode::Up => {
-                if self.current_tab == 2 {
-                    let i = self.table_state.selected().unwrap_or(0);
-                    if i > 0 {
-                        self.table_state.select(Some(i - 1));
+                match self.current_tab {
+                    0 | 1 | 3 => {
+                        self.scroll_offset = self.scroll_offset.saturating_sub(1);
                     }
+                    2 => {
+                        let i = self.table_state.selected().unwrap_or(0);
+                        if i > 0 {
+                            self.table_state.select(Some(i - 1));
+                        }
+                    }
+                    _ => {}
                 }
             }
             KeyCode::Down => {
-                if self.current_tab == 2 {
-                    let i = self.table_state.selected().unwrap_or(0);
-                    let max = self.state.queue_jobs.len().saturating_sub(1);
-                    self.table_state.select(Some((i + 1).min(max)));
+                match self.current_tab {
+                    0 | 1 | 3 => {
+                        self.scroll_offset += 1;
+                    }
+                    2 => {
+                        let i = self.table_state.selected().unwrap_or(0);
+                        let max = self.state.queue_jobs.len().saturating_sub(1);
+                        self.table_state.select(Some((i + 1).min(max)));
+                    }
+                    _ => {}
                 }
+            }
+            KeyCode::PageUp => {
+                match self.current_tab {
+                    0 | 1 | 3 => {
+                        self.scroll_offset = self.scroll_offset.saturating_sub(10);
+                    }
+                    2 => {
+                        let i = self.table_state.selected().unwrap_or(0);
+                        self.table_state.select(Some(i.saturating_sub(10)));
+                    }
+                    _ => {}
+                }
+            }
+            KeyCode::PageDown => {
+                match self.current_tab {
+                    0 | 1 | 3 => {
+                        self.scroll_offset += 10;
+                    }
+                    2 => {
+                        let i = self.table_state.selected().unwrap_or(0);
+                        let max = self.state.queue_jobs.len().saturating_sub(1);
+                        self.table_state.select(Some((i + 10).min(max)));
+                    }
+                    _ => {}
+                }
+            }
+            KeyCode::Esc => {
+                self.current_tab = 2;
+                self.scroll_offset = 0;
             }
             _ => {}
         }

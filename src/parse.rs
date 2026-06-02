@@ -54,9 +54,7 @@ pub fn parse_sinfo(input: &str, filter_fn: impl Fn(&str) -> bool) -> Result<Vec<
             continue;
         }
 
-        let _avail = if partition_raw.ends_with('*') { "DOWN" } else { "UP" };
-        let avail_str = _avail;
-        let _avail = if avail_str == "DOWN" { "down" } else { "up" };
+        let avail_str = if partition_raw.ends_with('*') { "DOWN" } else { "UP" };
 
         let cpu = parse_cpu_counts(parts[2]).unwrap_or_default();
         let node_counts: crate::model::NodeCounts = parse_node_counts(parts[3]).unwrap_or_default();
@@ -263,10 +261,7 @@ pub fn parse_scontrol_partitions(
 pub fn parse_sacctmgr_qos(input: &str) -> Result<Vec<QoS>, ParseError> {
     let input = input.trim();
     if input.is_empty() {
-        // Empty sacctmgr output is valid (no QoS data); just skip it.
-        if input.is_empty() {
-            return Ok(Vec::new());
-        }
+        return Ok(Vec::new());
     }
 
     let mut result: Vec<QoS> = Vec::new();

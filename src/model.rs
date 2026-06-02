@@ -16,8 +16,11 @@ pub enum NodeState {
 impl NodeState {
     pub fn from_sinfo(state_raw: &str) -> Self {
         let lowered = state_raw.to_lowercase();
-        let s = lowered.trim_end_matches(|c: char| "!+$~#@^".contains(c));
+        let s = lowered.trim_end_matches(|c: char| "!+$~#@^*%".contains(c));
         if s.contains("alloc") && s.contains("mix") {
+            return NodeState::Mix;
+        }
+        if s == "mix" {
             return NodeState::Mix;
         }
         if s.contains("alloc") || s.contains("allocated") {
@@ -30,7 +33,7 @@ impl NodeState {
             return NodeState::Down;
         }
         // drain, draining, drained, fail, maint, reboot …
-        if s.starts_with("drain") || s.starts_with("down") {
+        if s.starts_with("drain") {
             return NodeState::Drain;
         }
         NodeState::Other
