@@ -28,6 +28,24 @@ const C_NODE_MIX: Color = Color::Rgb(0xdd, 0xaa, 0x00);
 const C_NODE_IDLE: Color = Color::Rgb(0x22, 0xcc, 0x44);
 const C_NODE_DRAIN: Color = Color::Rgb(0x55, 0x55, 0x55);
 
+const PARTITION_PALETTE: &[Color] = &[
+    Color::Rgb(0x44, 0xee, 0x88),
+    Color::Rgb(0xdd, 0x88, 0x22),
+    Color::Rgb(0x22, 0xaa, 0xdd),
+    Color::Rgb(0xdd, 0x44, 0x77),
+    Color::Rgb(0x44, 0xdd, 0xdd),
+    Color::Rgb(0xdd, 0xdd, 0x44),
+    Color::Rgb(0x88, 0x44, 0xdd),
+    Color::Rgb(0xdd, 0x66, 0x22),
+    Color::Rgb(0x22, 0xdd, 0x88),
+    Color::Rgb(0x44, 0x88, 0xdd),
+];
+
+fn partition_color(name: &str) -> Color {
+    let hash: u64 = name.bytes().fold(0u64, |h, b| h.wrapping_mul(31).wrapping_add(b as u64));
+    PARTITION_PALETTE[hash as usize % PARTITION_PALETTE.len()]
+}
+
 const TAB_NAMES: &[&str] = &[
     " ① Resources ",
     " ② Rules ",
@@ -298,6 +316,10 @@ impl App {
         ])
     }
 
+    fn find_rule(&self, partition: &str) -> Option<&model::Rule> {
+        self.state.rules.iter().find(|r| r.partition == partition)
+    }
+
     fn render_resources(&mut self, frame: &mut Frame, area: Rect) {
         if self.state.resource_rows.is_empty() {
             let p = Paragraph::new("No partition data.").style(Style::default().fg(Color::Gray));
@@ -315,13 +337,23 @@ impl App {
         )));
 
         let total_cpu_alloc: u32 = self.state.resource_rows.iter().map(|r| r.cpu.alloc).sum();
+        let total_cpu_idle: u32 = self.state.resource_rows.iter().map(|r| r.cpu.idle).sum();
         let total_cpu_all: u32 = self.state.resource_rows.iter().map(|r| r.cpu.total).sum();
         lines.push(Line::from(vec![
-            Span::styled(" CPUs ".to_string(), Style::default().fg(Color::White)),
+            Span::styled(" CPUs     ".to_string(), Style::default().fg(Color::White)),
             Self::progress_bar(total_cpu_alloc, total_cpu_all),
             Span::styled(
                 format!(" {} / {}  {:.1}%", total_cpu_alloc, total_cpu_all,
                     if total_cpu_all > 0 { total_cpu_alloc as f64 * 100.0 / total_cpu_all as f64 } else { 0.0 }),
+                Style::default().fg(Color::Gray),
+            ),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled(" CPUs Idle".to_string(), Style::default().fg(Color::White)),
+            Self::progress_bar(total_cpu_idle, total_cpu_all),
+            Span::styled(
+                format!(" {} / {}  {:.1}%", total_cpu_idle, total_cpu_all,
+                    if total_cpu_all > 0 { total_cpu_idle as f64 * 100.0 / total_cpu_all as f64 } else { 0.0 }),
                 Style::default().fg(Color::Gray),
             ),
         ]));
@@ -332,7 +364,7 @@ impl App {
             .sum();
         if total_gpu_all > 0 {
             lines.push(Line::from(vec![
-                Span::styled(" GPUs ".to_string(), Style::default().fg(Color::White)),
+                Span::styled(" GPUs     ".to_string(), Style::default().fg(Color::White)),
                 Self::progress_bar(total_gpu_used as u32, total_gpu_all as u32),
                 Span::styled(
                     format!(" {} / {}  {:.1}%", total_gpu_used, total_gpu_all,
@@ -354,22 +386,60 @@ impl App {
         lines.push(Line::from(Span::raw("")));
 
         for row in &self.state.resource_rows {
+            let pcolor = partition_color(&row.partition);
             lines.push(Line::from(Span::styled(
                 format!(" ── {} ──", row.partition),
-                Style::default().fg(C_HI_BLUE).add_modifier(Modifier::BOLD),
+                Style::default().fg(pcolor).add_modifier(Modifier::BOLD),
             )));
 
+            let rule = self.find_rule(&row.partition);
+            let qos_name = rule.map(|r| r.qos.as_str()).unwrap_or("-");
             let avail_color = if row.avail == "up" { C_HI_GREEN } else { C_HI_RED };
             lines.push(Line::from(vec![
                 Span::styled("  ● ", Style::default().fg(avail_color)),
                 Span::raw(format!("{}  ", row.avail.to_uppercase())),
-                Span::styled("MaxTime ".to_string(), Style::default().fg(Color::Gray)),
+                Span::styled("QoS ".to_string(), Style::default().fg(Color::Gray)),
+                Span::styled(qos_name.to_string(), Style::default().fg(C_HI_CYAN)),
+                Span::styled("  MaxTime ".to_string(), Style::default().fg(Color::Gray)),
                 Span::styled(row.timelimit.clone(), Style::default().fg(C_HI_PURPLE)),
+            ]));
+            let mem_gb = if row.mem_mb >= 1024 {
+                format!("{}GB", row.mem_mb / 1024)
+            } else {
+                format!("{}MB", row.mem_mb)
+            };
+            lines.push(Line::from(vec![
                 Span::styled("  Mem ".to_string(), Style::default().fg(Color::Gray)),
-                Span::styled(format!("{}MB", row.mem_mb), Style::default().fg(Color::Rgb(0x88, 0xaa, 0xff))),
+                Span::styled(mem_gb, Style::default().fg(Color::Rgb(0x88, 0xaa, 0xff))),
                 Span::styled("  GRES ".to_string(), Style::default().fg(Color::Gray)),
                 Span::styled(row.gres.clone(), Style::default().fg(C_HI_YELLOW)),
             ]));
+
+            // Constraints line
+            if let Some(r) = rule {
+                let mut constraints = vec![];
+                if r.min_gpu > 0 {
+                    constraints.push(format!("MinGPU/job: {}", r.min_gpu));
+                }
+                if r.max_gpu_node > 0 {
+                    constraints.push(format!("MaxGPU/node: {}", r.max_gpu_node));
+                }
+                if r.min_nodes != "0" && r.min_nodes != "?" {
+                    constraints.push(format!("MinNodes: {}", r.min_nodes));
+                }
+                if r.max_nodes != "UNLIMITED" && r.max_nodes != "?" {
+                    constraints.push(format!("MaxNodes: {}", r.max_nodes));
+                }
+                if r.max_cpus_node != "UNLIMITED" && r.max_cpus_node != "?" {
+                    constraints.push(format!("MaxCPUs/Node: {}", r.max_cpus_node));
+                }
+                if !constraints.is_empty() {
+                    lines.push(Line::from(Span::styled(
+                        format!("  {}", constraints.join("  ")),
+                        Style::default().fg(Color::Rgb(0xbb, 0x99, 0x88)),
+                    )));
+                }
+            }
 
             lines.push(Line::from(vec![
                 Span::styled("  CPUs ".to_string(), Style::default().fg(Color::White)),
