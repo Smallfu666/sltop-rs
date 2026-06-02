@@ -1,4 +1,4 @@
-use std::io;
+use std::io::{self, Read};
 use std::time::{Duration, Instant};
 
 use ratatui::{
@@ -9,7 +9,6 @@ use ratatui::{
     widgets::{Paragraph, Row, Table, TableState, Tabs},
     Frame, Terminal,
 };
-use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::execute;
 
@@ -161,6 +160,7 @@ impl App {
         execute!(stdout, EnterAlternateScreen)?;
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
+        let mut stdin = io::stdin();
 
         loop {
             terminal.draw(|frame| self.render(frame))?;
@@ -182,12 +182,9 @@ impl App {
                 break;
             }
 
-            if event::poll(Duration::from_millis(100))? {
-                if let Event::Key(key) = event::read()? {
-                    if key.kind == KeyEventKind::Press {
-                        self.key_pressed(key)?;
-                    }
-                }
+            let mut buf = [0u8; 8];
+            if stdin.read(&mut buf)? > 0 {
+                self.handle_input(&buf[..])?;
             }
 
             if !self.running {
@@ -984,26 +981,88 @@ impl App {
         frame.render_widget(p, area);
     }
 
-    fn key_pressed(&mut self, key: crossterm::event::KeyEvent) -> io::Result<()> {
+    fn handle_input(&mut self, buf: &[u8]) -> io::Result<()> {
         self.last_interaction = Instant::now();
-        match key.code {
-            KeyCode::Char('q') => {
-                self.running = false;
+        let byte = buf[0];
+        // Escape sequence: \x1b[A (arrow) or \x1b[5~ (PgUp) or \x1b[6~ (PgDn)
+        if byte == 0x1b && buf.len() >= 3 {
+            if buf.len() >= 3 && buf[1] == b'[' {
+                match buf[2] {
+                    b'A' => { // Up
+                        match self.current_tab {
+                            0 | 1 | 3 => self.scroll_offset = self.scroll_offset.saturating_sub(1),
+                            2 => {
+                                let i = self.table_state.selected().unwrap_or(0);
+                                if i > 0 { self.table_state.select(Some(i - 1)); }
+                            }
+                            _ => {}
+                        }
+                        return Ok(());
+                    }
+                    b'B' => { // Down
+                        match self.current_tab {
+                            0 | 1 | 3 => self.scroll_offset += 1,
+                            2 => {
+                                let i = self.table_state.selected().unwrap_or(0);
+                                let max = self.state.queue_jobs.len().saturating_sub(1);
+                                self.table_state.select(Some((i + 1).min(max)));
+                            }
+                            _ => {}
+                        }
+                        return Ok(());
+                    }
+                    b'5' if buf.len() >= 4 && buf[3] == b'~' => { // PgUp
+                        match self.current_tab {
+                            0 | 1 | 3 => self.scroll_offset = self.scroll_offset.saturating_sub(10),
+                            2 => {
+                                let i = self.table_state.selected().unwrap_or(0);
+                                self.table_state.select(Some(i.saturating_sub(10)));
+                            }
+                            _ => {}
+                        }
+                        return Ok(());
+                    }
+                    b'6' if buf.len() >= 4 && buf[3] == b'~' => { // PgDn
+                        match self.current_tab {
+                            0 | 1 | 3 => self.scroll_offset += 10,
+                            2 => {
+                                let i = self.table_state.selected().unwrap_or(0);
+                                let max = self.state.queue_jobs.len().saturating_sub(1);
+                                self.table_state.select(Some((i + 10).min(max)));
+                            }
+                            _ => {}
+                        }
+                        return Ok(());
+                    }
+                    _ => {}
+                }
             }
-            KeyCode::Char('1') => { self.current_tab = 0; self.scroll_offset = 0; }
-            KeyCode::Char('2') => { self.current_tab = 1; self.scroll_offset = 0; }
-            KeyCode::Char('3') => { self.current_tab = 2; self.scroll_offset = 0; }
-            KeyCode::Char('4') => { self.current_tab = 3; self.scroll_offset = 0; }
-            KeyCode::Tab => {
+        }
+        // Single-byte keys
+        match byte {
+            b'\x1b' => { // Esc
+                if self.confirm_cancel.is_some() {
+                    self.confirm_cancel = None;
+                } else {
+                    self.current_tab = 2;
+                    self.scroll_offset = 0;
+                }
+            }
+            b'\t' => { // Tab
                 self.current_tab = (self.current_tab + 1) % 4;
                 self.scroll_offset = 0;
             }
-            KeyCode::Char('r') => {
+            b'q' => self.running = false,
+            b'1' => { self.current_tab = 0; self.scroll_offset = 0; }
+            b'2' => { self.current_tab = 1; self.scroll_offset = 0; }
+            b'3' => { self.current_tab = 2; self.scroll_offset = 0; }
+            b'4' => { self.current_tab = 3; self.scroll_offset = 0; }
+            b'r' => {
                 let _ = self.state.refresh(&*self.runner);
                 self.state.update_my_jobs();
                 self.last_auto_refresh = Instant::now();
             }
-            KeyCode::Char('s') => {
+            b's' => {
                 let ncols = QUEUE_HEADERS.len();
                 self.state.sort_col = match self.state.sort_col {
                     None => Some(0),
@@ -1015,68 +1074,14 @@ impl App {
                 }
                 self.state.apply_sort_to_queue();
             }
-            KeyCode::Char('S') => {
+            b'S' => {
                 if self.state.sort_col.is_some() {
                     self.state.sort_rev = !self.state.sort_rev;
                     self.state.apply_sort_to_queue();
                 }
             }
-            KeyCode::Char('h') => {
-                self.show_help = !self.show_help;
-            }
-            KeyCode::Up => {
-                match self.current_tab {
-                    0 | 1 | 3 => {
-                        self.scroll_offset = self.scroll_offset.saturating_sub(1);
-                    }
-                    2 => {
-                        let i = self.table_state.selected().unwrap_or(0);
-                        if i > 0 {
-                            self.table_state.select(Some(i - 1));
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            KeyCode::Down => {
-                match self.current_tab {
-                    0 | 1 | 3 => {
-                        self.scroll_offset += 1;
-                    }
-                    2 => {
-                        let i = self.table_state.selected().unwrap_or(0);
-                        let max = self.state.queue_jobs.len().saturating_sub(1);
-                        self.table_state.select(Some((i + 1).min(max)));
-                    }
-                    _ => {}
-                }
-            }
-            KeyCode::PageUp => {
-                match self.current_tab {
-                    0 | 1 | 3 => {
-                        self.scroll_offset = self.scroll_offset.saturating_sub(10);
-                    }
-                    2 => {
-                        let i = self.table_state.selected().unwrap_or(0);
-                        self.table_state.select(Some(i.saturating_sub(10)));
-                    }
-                    _ => {}
-                }
-            }
-            KeyCode::PageDown => {
-                match self.current_tab {
-                    0 | 1 | 3 => {
-                        self.scroll_offset += 10;
-                    }
-                    2 => {
-                        let i = self.table_state.selected().unwrap_or(0);
-                        let max = self.state.queue_jobs.len().saturating_sub(1);
-                        self.table_state.select(Some((i + 10).min(max)));
-                    }
-                    _ => {}
-                }
-            }
-            KeyCode::Char('c') => {
+            b'h' => self.show_help = !self.show_help,
+            b'c' => {
                 if self.current_tab == 3 {
                     let standalone = &self.state.job_groups.standalone;
                     if !standalone.is_empty() && self.scroll_offset < standalone.len() {
@@ -1093,7 +1098,7 @@ impl App {
                     }
                 }
             }
-            KeyCode::Char('C') => {
+            b'C' => {
                 if self.current_tab == 3 && self.confirm_cancel.is_none() {
                     let standalone = &self.state.job_groups.standalone;
                     if !standalone.is_empty() && self.scroll_offset < standalone.len() {
@@ -1103,7 +1108,7 @@ impl App {
                     }
                 }
             }
-            KeyCode::Char('y') | KeyCode::Char('Y') => {
+            b'y' | b'Y' => {
                 if let Some((job_id, _)) = self.confirm_cancel.take() {
                     let result = self.runner.run_scancel(&job_id);
                     match result {
@@ -1118,13 +1123,7 @@ impl App {
                     }
                 }
             }
-            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
-                if self.current_tab != 3 {
-                    self.current_tab = 2;
-                    self.scroll_offset = 0;
-                }
-                self.confirm_cancel = None;
-            }
+            b'n' | b'N' => self.confirm_cancel = None,
             _ => {}
         }
         Ok(())
